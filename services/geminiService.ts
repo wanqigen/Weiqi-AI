@@ -20,10 +20,19 @@ const boardToString = (grid: StoneColor[][]): string => {
   return s;
 };
 
+// Helper to ensure URL has protocol
+const normalizeUrl = (url: string): string => {
+  let cleanUrl = url.trim().replace(/\/$/, "");
+  if (!/^https?:\/\//i.test(cleanUrl)) {
+    cleanUrl = `http://${cleanUrl}`;
+  }
+  return cleanUrl;
+};
+
 // Fetch available models from Ollama
 export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
   try {
-    const cleanUrl = baseUrl.replace(/\/$/, "");
+    const cleanUrl = normalizeUrl(baseUrl);
     const response = await fetch(`${cleanUrl}/api/tags`);
     
     if (!response.ok) {
@@ -44,7 +53,7 @@ export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
 
 // Generic fetch wrapper for Ollama
 async function callOllama(prompt: string, model: string, baseUrl: string): Promise<any> {
-  const cleanUrl = baseUrl.replace(/\/$/, "");
+  const cleanUrl = normalizeUrl(baseUrl);
   const apiUrl = `${cleanUrl}/api/generate`;
 
   try {
@@ -66,7 +75,17 @@ async function callOllama(prompt: string, model: string, baseUrl: string): Promi
     }
 
     const data = await response.json();
-    return JSON.parse(data.response);
+    // Handle cases where response might be a string (some older Ollama versions/models)
+    if (typeof data.response === 'string') {
+        try {
+            return JSON.parse(data.response);
+        } catch (e) {
+            // If the model didn't return strict JSON despite "format: json", try to salvage
+            console.warn("Could not parse JSON from model response", data.response);
+            throw new Error("Model response was not valid JSON");
+        }
+    }
+    return data.response;
   } catch (error) {
     console.error("Ollama connection failed:", error);
     throw error;
@@ -104,7 +123,7 @@ export const getBestMove = async (
   try {
     const json = await callOllama(prompt, modelName, baseUrl);
     
-    if (typeof json.x === 'number' && typeof json.y === 'number') {
+    if (json && typeof json.x === 'number' && typeof json.y === 'number') {
       return { x: json.x, y: json.y, explanation: json.explanation || "Strategic move" };
     }
     return null;
@@ -151,6 +170,12 @@ export const getBoardAnalysis = async (
     const data = await callOllama(prompt, modelName, baseUrl);
     if (Array.isArray(data)) {
       return data as AnalysisPoint[];
+    }
+    // Handle case where model wraps array in object like { "moves": [...] }
+    if (data && typeof data === 'object') {
+        const values = Object.values(data);
+        const array = values.find(v => Array.isArray(v));
+        if (array) return array as AnalysisPoint[];
     }
     return [];
   } catch (error) {

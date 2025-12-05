@@ -3,7 +3,7 @@ import { Board } from './components/Board';
 import { StoneColor, Coordinates, AnalysisPoint, GameHistory } from './types';
 import { createEmptyBoard, placeStone, BOARD_SIZE } from './utils/gameLogic';
 import { getBestMove, getBoardAnalysis, fetchOllamaModels } from './services/geminiService';
-import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw } from 'lucide-react';
+import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle } from 'lucide-react';
 
 const App: React.FC = () => {
   // Game State
@@ -27,6 +27,7 @@ const App: React.FC = () => {
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [showSettings, setShowSettings] = useState(false);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
 
   // Initial fetch for models
   useEffect(() => {
@@ -40,7 +41,7 @@ const App: React.FC = () => {
         const models = await fetchOllamaModels(ollamaBaseUrl);
         setAvailableModels(models);
         // If we found models and current model is not in list (or default), select first one
-        if (models.length > 0 && !models.includes(ollamaModel)) {
+        if (models.length > 0 && (!ollamaModel || !models.includes(ollamaModel))) {
             setOllamaModel(models[0]);
         }
     } catch (e) {
@@ -99,7 +100,8 @@ const App: React.FC = () => {
   const handleAiError = (err: any) => {
      let msg = "Failed to connect to Ollama.";
      if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
-         msg = `Could not connect to Ollama at ${ollamaBaseUrl}. Ensure it is running and 'OLLAMA_ORIGINS="*"' is set.`;
+         msg = `Connection failed. Browser blocked the request to ${ollamaBaseUrl}.`;
+         setShowHelpModal(true);
      } else if (err instanceof Error) {
          msg = err.message;
      }
@@ -210,7 +212,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-stone-100 flex flex-col items-center py-8 font-sans">
       
       {/* Header */}
-      <header className="mb-6 text-center">
+      <header className="mb-6 text-center relative z-10">
         <h1 className="text-4xl font-serif-sc font-bold text-stone-800 mb-2 flex items-center justify-center gap-3">
           <Activity className="w-8 h-8 text-emerald-600" />
           Zen Go <span className="text-stone-400 font-light text-2xl">| Local AI</span>
@@ -264,7 +266,12 @@ const App: React.FC = () => {
                 {showSettings && (
                     <div className="mb-4 p-3 bg-stone-50 rounded border border-stone-200 space-y-3">
                          <div>
-                            <label className="text-xs font-bold text-stone-600 block mb-1">Ollama Base URL</label>
+                            <div className="flex justify-between items-center mb-1">
+                                <label className="text-xs font-bold text-stone-600">Ollama Base URL</label>
+                                <button onClick={() => setShowHelpModal(true)} className="text-xs text-emerald-600 hover:underline flex items-center gap-1">
+                                    <HelpCircle size={10} /> Help
+                                </button>
+                            </div>
                             <div className="flex gap-1">
                                 <input 
                                     type="text" 
@@ -305,7 +312,6 @@ const App: React.FC = () => {
                                 />
                             )}
                         </div>
-                        <p className="text-[10px] text-stone-400">Ensure 'ollama serve' is running.</p>
                     </div>
                 )}
 
@@ -336,9 +342,17 @@ const App: React.FC = () => {
 
             {/* Error Message Display */}
             {errorMsg && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                <div 
+                    onClick={() => setShowHelpModal(true)}
+                    className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2 cursor-pointer hover:bg-red-100 transition-colors"
+                    title="Click for help"
+                >
                     <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                    <p className="text-xs text-red-700 break-words">{errorMsg}</p>
+                    <div>
+                        <p className="text-xs text-red-700 font-bold mb-1">Connection Error</p>
+                        <p className="text-[10px] text-red-600 break-words leading-tight">{errorMsg}</p>
+                        <p className="text-[10px] text-red-500 underline mt-1">Click for setup instructions</p>
+                    </div>
                 </div>
             )}
 
@@ -448,6 +462,65 @@ const App: React.FC = () => {
 
         </div>
       </div>
+
+      {/* Troubleshooting Modal */}
+      {showHelpModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 relative">
+                <button 
+                    onClick={() => setShowHelpModal(false)}
+                    className="absolute top-4 right-4 text-stone-400 hover:text-stone-600"
+                >
+                    <X size={20} />
+                </button>
+                
+                <h2 className="text-xl font-bold text-stone-800 mb-4 flex items-center gap-2">
+                    <AlertCircle className="text-emerald-600" />
+                    Connecting to Ollama
+                </h2>
+                
+                <div className="space-y-4 text-sm text-stone-700">
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <p className="font-bold text-amber-800 mb-1">Browser Security Block (CORS)</p>
+                        <p>Browsers block web pages from accessing local servers unless specifically allowed. You must restart Ollama with the <code>OLLAMA_ORIGINS</code> environment variable.</p>
+                    </div>
+
+                    <div>
+                        <h3 className="font-bold text-stone-900 mb-2">How to fix (Mac / Linux):</h3>
+                        <pre className="bg-stone-800 text-stone-100 p-3 rounded-lg font-mono text-xs overflow-x-auto">
+                            OLLAMA_ORIGINS="*" ollama serve
+                        </pre>
+                    </div>
+
+                    <div>
+                        <h3 className="font-bold text-stone-900 mb-2">How to fix (Windows Powershell):</h3>
+                        <pre className="bg-stone-800 text-stone-100 p-3 rounded-lg font-mono text-xs overflow-x-auto">
+                            $env:OLLAMA_ORIGINS="*"; ollama serve
+                        </pre>
+                    </div>
+
+                    <div>
+                         <h3 className="font-bold text-stone-900 mb-2">Common Issues:</h3>
+                         <ul className="list-disc pl-5 space-y-1 text-stone-600">
+                             <li>Ensure Ollama is actually running (try visiting <code>http://localhost:11434</code> in a new tab).</li>
+                             <li>If you are using Chrome/Edge, verify the URL starts with <code>http://</code> not <code>https://</code> if your local server isn't using SSL.</li>
+                             <li>Sometimes <code>localhost</code> doesn't resolve; try using <code>http://127.0.0.1:11434</code>.</li>
+                         </ul>
+                    </div>
+                </div>
+
+                <div className="mt-6 flex justify-end">
+                    <button 
+                        onClick={() => setShowHelpModal(false)}
+                        className="px-4 py-2 bg-stone-200 text-stone-700 rounded-lg hover:bg-stone-300 font-medium"
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
     </div>
   );
 };
