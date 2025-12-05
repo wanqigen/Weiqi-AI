@@ -31,7 +31,7 @@ export const Board: React.FC<BoardProps> = ({
   const padding = 30;
   const boardPixelSize = (size - 1) * cellSize + padding * 2;
 
-  // Render grid lines
+  // Render grid lines - Memoized
   const lines = useMemo(() => {
     const linesArray = [];
     for (let i = 0; i < size; i++) {
@@ -43,8 +43,9 @@ export const Board: React.FC<BoardProps> = ({
           y1={padding}
           x2={padding + i * cellSize}
           y2={boardPixelSize - padding}
-          stroke="#000"
+          stroke="#403020"
           strokeWidth="1"
+          opacity="0.8"
         />
       );
       // Horizontal
@@ -55,15 +56,16 @@ export const Board: React.FC<BoardProps> = ({
           y1={padding + i * cellSize}
           x2={boardPixelSize - padding}
           y2={padding + i * cellSize}
-          stroke="#000"
+          stroke="#403020"
           strokeWidth="1"
+          opacity="0.8"
         />
       );
     }
     return linesArray;
   }, [size, boardPixelSize]);
 
-  // Render Star Points (Hoshi)
+  // Render Star Points (Hoshi) - Memoized
   const starPoints = useMemo(() => {
     if (size !== 19) return null; // Only for 19x19 for now
     return STAR_POINTS_19.map((p, i) => (
@@ -72,77 +74,80 @@ export const Board: React.FC<BoardProps> = ({
         cx={padding + p.x * cellSize}
         cy={padding + p.y * cellSize}
         r={3}
-        fill="#000"
+        fill="#302010"
       />
     ));
   }, [size]);
 
-  // Render Stones
-  const stones = [];
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const stone = grid[y][x];
-      if (stone !== StoneColor.EMPTY) {
-        const cx = padding + x * cellSize;
-        const cy = padding + y * cellSize;
-        
-        // Stone shadow
-        stones.push(
-          <circle
-            key={`shadow-${x}-${y}`}
-            cx={cx + 1}
-            cy={cy + 1}
-            r={cellSize * 0.48}
-            fill="rgba(0,0,0,0.2)"
-          />
-        );
-
-        // Actual stone
-        stones.push(
-          <circle
-            key={`stone-${x}-${y}`}
-            cx={cx}
-            cy={cy}
-            r={cellSize * 0.46}
-            fill={stone === StoneColor.BLACK ? '#111' : '#fcfcfc'}
-            stroke={stone === StoneColor.WHITE ? '#ddd' : 'none'}
-          />
-        );
-
-        // Stone highlight (for 3D effect)
-        if (stone === StoneColor.BLACK) {
-           stones.push(
+  // Render Stones - Memoized to prevent recalculation on every prop change if grid hasn't changed
+  const stones = useMemo(() => {
+    const renderedStones = [];
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const stone = grid[y][x];
+        if (stone !== StoneColor.EMPTY) {
+          const cx = padding + x * cellSize;
+          const cy = padding + y * cellSize;
+          
+          // Stone shadow
+          renderedStones.push(
             <circle
-              key={`glint-${x}-${y}`}
-              cx={cx - cellSize * 0.15}
-              cy={cy - cellSize * 0.15}
-              r={cellSize * 0.1}
-              fill="rgba(255,255,255,0.15)"
+              key={`shadow-${x}-${y}`}
+              cx={cx + 1}
+              cy={cy + 1}
+              r={cellSize * 0.48}
+              fill="rgba(0,0,0,0.2)"
             />
-           )
-        } else {
-             stones.push(
+          );
+
+          // Actual stone
+          renderedStones.push(
             <circle
-              key={`shade-${x}-${y}`}
-              cx={cx - cellSize * 0.1}
-              cy={cy - cellSize * 0.1}
-              r={cellSize * 0.35}
-              fill="rgba(255,255,255,0.4)" // subtle shell texture simulation
-              className="pointer-events-none"
+              key={`stone-${x}-${y}`}
+              cx={cx}
+              cy={cy}
+              r={cellSize * 0.46}
+              fill={stone === StoneColor.BLACK ? '#111' : '#fcfcfc'}
+              stroke={stone === StoneColor.WHITE ? '#ccc' : 'none'}
             />
-           )
+          );
+
+          // Stone highlight (for 3D effect)
+          if (stone === StoneColor.BLACK) {
+             renderedStones.push(
+              <circle
+                key={`glint-${x}-${y}`}
+                cx={cx - cellSize * 0.15}
+                cy={cy - cellSize * 0.15}
+                r={cellSize * 0.1}
+                fill="rgba(255,255,255,0.15)"
+              />
+             )
+          } else {
+               renderedStones.push(
+              <circle
+                key={`shade-${x}-${y}`}
+                cx={cx - cellSize * 0.1}
+                cy={cy - cellSize * 0.1}
+                r={cellSize * 0.35}
+                fill="rgba(255,255,255,0.4)" // subtle shell texture simulation
+                className="pointer-events-none"
+              />
+             )
+          }
         }
       }
     }
-  }
+    return renderedStones;
+  }, [grid, size]);
 
   // Last Move Marker
-  let lastMoveMarker = null;
-  if (lastMove) {
+  const lastMoveMarker = useMemo(() => {
+    if (!lastMove) return null;
     const cx = padding + lastMove.x * cellSize;
     const cy = padding + lastMove.y * cellSize;
     const stoneColor = grid[lastMove.y][lastMove.x];
-    lastMoveMarker = (
+    return (
       <circle
         cx={cx}
         cy={cy}
@@ -152,7 +157,7 @@ export const Board: React.FC<BoardProps> = ({
         strokeWidth="2"
       />
     );
-  }
+  }, [lastMove, grid]);
 
   // Analysis Overlays
   const analysisMarkers = useMemo(() => {
@@ -191,38 +196,51 @@ export const Board: React.FC<BoardProps> = ({
     })
   }, [analysisData, showAnalysis]);
 
-  // Clickable areas (invisible circles)
-  const clickTargets = [];
-  if (!disabled) {
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        clickTargets.push(
-          <rect
-            key={`click-${x}-${y}`}
-            x={padding + x * cellSize - cellSize / 2}
-            y={padding + y * cellSize - cellSize / 2}
-            width={cellSize}
-            height={cellSize}
-            fill="transparent"
-            cursor="pointer"
-            onClick={() => onIntersectionClick(x, y)}
-            className="hover:fill-black/10 transition-colors"
-          />
-        );
+  // Clickable areas (invisible circles) - Memoized
+  const clickTargets = useMemo(() => {
+    const targets = [];
+    if (!disabled) {
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          targets.push(
+            <rect
+              key={`click-${x}-${y}`}
+              x={padding + x * cellSize - cellSize / 2}
+              y={padding + y * cellSize - cellSize / 2}
+              width={cellSize}
+              height={cellSize}
+              fill="transparent"
+              cursor="pointer"
+              onClick={() => onIntersectionClick(x, y)}
+              className="hover:fill-black/10 transition-colors"
+            />
+          );
+        }
       }
     }
-  }
+    return targets;
+  }, [size, disabled, onIntersectionClick]);
 
   return (
     <div className="relative shadow-2xl rounded-sm overflow-hidden bg-[#e3c07e] select-none inline-block">
-      {/* Wood Texture Background CSS */}
+      {/* 
+         Performance Note: Removed heavy SVG filter background.
+         Using simple CSS gradient for wood texture effect.
+      */}
       <div 
-        className="absolute inset-0 pointer-events-none opacity-40"
+        className="absolute inset-0 pointer-events-none"
         style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.6' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.5'/%3E%3C/svg%3E")`,
-            filter: 'sepia(0.5) contrast(0.8)'
+            background: `
+              linear-gradient(45deg, #dcb35c 0%, #e3c07e 100%)
+            `
         }}
-      ></div>
+      >
+        {/* Simple noise texture via CSS radial gradient dots if desired, or just solid gradient for speed */}
+        <div className="absolute inset-0 opacity-10" style={{
+            backgroundImage: `radial-gradient(#8b5a2b 1px, transparent 1px)`,
+            backgroundSize: '16px 16px'
+        }}></div>
+      </div>
 
       <svg width={boardPixelSize} height={boardPixelSize} className="relative z-10 block">
         {lines}
@@ -238,7 +256,7 @@ export const Board: React.FC<BoardProps> = ({
           {Array.from({length: 19}).map((_, i) => {
                const letters = "ABCDEFGHJKLMNOPQRST";
                return (
-                   <div key={i} className="flex-1 text-center text-[10px] font-bold opacity-60" style={{width: 32, flex: 'none', marginLeft: i === 0 ? 14 : 0}}>
+                   <div key={i} className="flex-1 text-center text-[10px] font-bold opacity-60 text-[#302010]" style={{width: 32, flex: 'none', marginLeft: i === 0 ? 14 : 0}}>
                        {letters[i]}
                    </div>
                )
