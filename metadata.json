@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Zen Go (Weiqi) AI",
+  "description": "A refined Go (Weiqi) game playing against Gemini AI with position analysis and optimal move suggestions.",
+  "requestFramePermissions": []
+}
