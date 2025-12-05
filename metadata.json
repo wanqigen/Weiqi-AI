@@ -1,5 +1,5 @@
 {
-  "name": "Copy of Zen Go (Weiqi) AI",
-  "description": "A refined Go (Weiqi) game playing against Gemini AI with position analysis and optimal move suggestions.",
+  "name": "Zen Go (Weiqi) Local AI",
+  "description": "A refined Go (Weiqi) game playing against local Ollama models (e.g. Llama 3).",
   "requestFramePermissions": []
 }

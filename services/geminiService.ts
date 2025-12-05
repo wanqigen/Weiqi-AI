@@ -1,4 +1,3 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { StoneColor, AnalysisPoint, MoveResult } from "../types";
 
 const BOARD_SIZE = 19;
@@ -21,129 +20,139 @@ const boardToString = (grid: StoneColor[][]): string => {
   return s;
 };
 
-// Convert Go coordinate (e.g. "Q16") to x,y
-// This is used if the model returns string coordinates, though we will ask for JSON.
-const parseCoordinate = (coord: string): { x: number, y: number } | null => {
-  const letters = "ABCDEFGHJKLMNOPQRST";
-  const colChar = coord.charAt(0).toUpperCase();
-  const rowStr = coord.slice(1);
-  
-  const x = letters.indexOf(colChar);
-  const row = parseInt(rowStr);
-  
-  if (x === -1 || isNaN(row)) return null;
-  
-  const y = BOARD_SIZE - row;
-  return { x, y };
+// Fetch available models from Ollama
+export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
+  try {
+    const cleanUrl = baseUrl.replace(/\/$/, "");
+    const response = await fetch(`${cleanUrl}/api/tags`);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch models: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    // Ollama API returns structure: { models: [{ name: "llama3:latest", ... }, ...] }
+    if (data.models && Array.isArray(data.models)) {
+      return data.models.map((m: any) => m.name);
+    }
+    return [];
+  } catch (error) {
+    console.error("Error fetching Ollama models:", error);
+    throw error;
+  }
 };
 
-const getAi = () => {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
-};
+// Generic fetch wrapper for Ollama
+async function callOllama(prompt: string, model: string, baseUrl: string): Promise<any> {
+  const cleanUrl = baseUrl.replace(/\/$/, "");
+  const apiUrl = `${cleanUrl}/api/generate`;
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model,
+        prompt: prompt,
+        stream: false,
+        format: "json" // Request JSON mode from Ollama
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return JSON.parse(data.response);
+  } catch (error) {
+    console.error("Ollama connection failed:", error);
+    throw error;
+  }
+}
 
 export const getBestMove = async (
   grid: StoneColor[][], 
-  player: StoneColor
+  player: StoneColor,
+  modelName: string,
+  baseUrl: string
 ): Promise<MoveResult | null> => {
-  const ai = getAi();
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
   const prompt = `
-    You are a professional 9-dan Go player.
+    You are a professional 9-dan Go (Weiqi) player.
+    
     Current Board State:
     ${boardStr}
     
     It is ${playerStr}'s turn.
-    Analyze the board and choose the best next move.
+    Analyze the board and choose the ONE best next move.
     
-    Return the result in JSON format with 'x' (0-18, from left), 'y' (0-18, from top), and a short 'explanation'.
-    The top-left corner is 0,0.
-    The bottom-right corner is 18,18.
-    Ensure the move is legal (not on top of another stone).
+    You must output a VALID JSON object. Do not include markdown formatting.
+    The JSON object must have these fields:
+    - "x": integer (0-18, representing the column from left, A=0)
+    - "y": integer (0-18, representing the row from top, 19=0)
+    - "explanation": string (A short strategic reasoning for the move)
+
+    Example Output:
+    { "x": 15, "y": 3, "explanation": "Approaching the corner to secure territory." }
   `;
 
-  const schema: Schema = {
-    type: Type.OBJECT,
-    properties: {
-      x: { type: Type.INTEGER, description: "The column index (0-18)" },
-      y: { type: Type.INTEGER, description: "The row index (0-18)" },
-      explanation: { type: Type.STRING, description: "Brief strategic reasoning" }
-    },
-    required: ["x", "y", "explanation"]
-  };
-
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        temperature: 0.2 // Lower temperature for more focused play
-      }
-    });
-
-    const json = JSON.parse(response.text || "{}");
-    if (json.x !== undefined && json.y !== undefined) {
-      return { x: json.x, y: json.y, explanation: json.explanation };
+    const json = await callOllama(prompt, modelName, baseUrl);
+    
+    if (typeof json.x === 'number' && typeof json.y === 'number') {
+      return { x: json.x, y: json.y, explanation: json.explanation || "Strategic move" };
     }
     return null;
 
   } catch (error) {
     console.error("Error getting best move:", error);
-    return null;
+    throw error; // Re-throw to handle in UI
   }
 };
 
 export const getBoardAnalysis = async (
   grid: StoneColor[][],
-  player: StoneColor
+  player: StoneColor,
+  modelName: string,
+  baseUrl: string
 ): Promise<AnalysisPoint[]> => {
-  const ai = getAi();
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
   const prompt = `
     You are a professional Go tutor.
+    
     Current Board State:
     ${boardStr}
     
     It is ${playerStr}'s turn.
-    Identify the top 3 to 5 candidate moves.
-    Assign a 'weight' (0-100) representing the quality/value of the move.
-    Provide a very short reasoning for each.
+    Identify the top 3 candidate moves.
     
-    Return a JSON array of objects.
-    Coordinates are 0-indexed: x (0-18 from left), y (0-18 from top).
+    You must output a VALID JSON ARRAY of objects. Do not include markdown formatting.
+    Each object in the array must have:
+    - "x": integer (0-18, column index)
+    - "y": integer (0-18, row index)
+    - "weight": integer (0-100, representing move quality)
+    - "reasoning": string (Short explanation)
+
+    Example Output:
+    [
+      { "x": 3, "y": 3, "weight": 95, "reasoning": "Taking the star point." },
+      { "x": 16, "y": 3, "weight": 80, "reasoning": "Enclosing the corner." }
+    ]
   `;
 
-  const schema: Schema = {
-    type: Type.ARRAY,
-    items: {
-      type: Type.OBJECT,
-      properties: {
-        x: { type: Type.INTEGER },
-        y: { type: Type.INTEGER },
-        weight: { type: Type.INTEGER },
-        reasoning: { type: Type.STRING }
-      },
-      required: ["x", "y", "weight", "reasoning"]
-    }
-  };
-
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-      }
-    });
-
-    const data = JSON.parse(response.text || "[]");
-    return data as AnalysisPoint[];
+    const data = await callOllama(prompt, modelName, baseUrl);
+    if (Array.isArray(data)) {
+      return data as AnalysisPoint[];
+    }
+    return [];
   } catch (error) {
     console.error("Error analyzing board:", error);
     return [];

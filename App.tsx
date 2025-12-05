@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Board } from './components/Board';
-import { StoneColor, BoardState, Coordinates, AnalysisPoint, GameHistory } from './types';
+import { StoneColor, Coordinates, AnalysisPoint, GameHistory } from './types';
 import { createEmptyBoard, placeStone, BOARD_SIZE } from './utils/gameLogic';
-import { getBestMove, getBoardAnalysis } from './services/geminiService';
-import { Brain, RotateCcw, Play, SkipForward, Info, ChevronRight, Activity } from 'lucide-react';
+import { getBestMove, getBoardAnalysis, fetchOllamaModels } from './services/geminiService';
+import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw } from 'lucide-react';
 
 const App: React.FC = () => {
   // Game State
@@ -18,9 +18,39 @@ const App: React.FC = () => {
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [analysisData, setAnalysisData] = useState<AnalysisPoint[]>([]);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   // Settings
   const [aiPlaying, setAiPlaying] = useState<StoneColor | null>(StoneColor.WHITE); // Default AI plays White
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [ollamaModel, setOllamaModel] = useState("llama3");
+  const [showSettings, setShowSettings] = useState(false);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
+
+  // Initial fetch for models
+  useEffect(() => {
+    handleFetchModels(true);
+  }, []);
+
+  const handleFetchModels = async (silent = false) => {
+    if (!silent) setIsFetchingModels(true);
+    setErrorMsg(null);
+    try {
+        const models = await fetchOllamaModels(ollamaBaseUrl);
+        setAvailableModels(models);
+        // If we found models and current model is not in list (or default), select first one
+        if (models.length > 0 && !models.includes(ollamaModel)) {
+            setOllamaModel(models[0]);
+        }
+    } catch (e) {
+        if (!silent) {
+            handleAiError(e);
+        }
+    } finally {
+        if (!silent) setIsFetchingModels(false);
+    }
+  };
 
   // Helper to append history
   const addToHistory = () => {
@@ -49,6 +79,7 @@ const App: React.FC = () => {
     addToHistory();
     setBoard(result.newGrid);
     setLastMove({ x, y });
+    setErrorMsg(null);
     
     // Update captures
     const captured = result.capturedCount;
@@ -65,32 +96,42 @@ const App: React.FC = () => {
     setAiSuggestion(null);
   };
 
+  const handleAiError = (err: any) => {
+     let msg = "Failed to connect to Ollama.";
+     if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
+         msg = `Could not connect to Ollama at ${ollamaBaseUrl}. Ensure it is running and 'OLLAMA_ORIGINS="*"' is set.`;
+     } else if (err instanceof Error) {
+         msg = err.message;
+     }
+     setErrorMsg(msg);
+     setAiSuggestion(msg);
+  };
+
   // AI Turn Effect
   useEffect(() => {
     if (currentTurn === aiPlaying && !isThinking) {
       const makeAiMove = async () => {
         setIsThinking(true);
+        setErrorMsg(null);
         try {
-            // Add a small artificial delay for UI feel if API is too fast (unlikely for LLM but good for UX)
-            // await new Promise(r => setTimeout(r, 500)); 
-            
-            const move = await getBestMove(board, currentTurn);
+            const move = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
             if (move) {
                 setAiSuggestion(move.explanation || "Strategic placement.");
                 await executeMove(move.x, move.y, currentTurn);
             } else {
-                // AI Pass or Resign (just log for now)
-                setAiSuggestion("Pass");
+                setAiSuggestion("Pass (AI could not find a valid move)");
                 const nextTurn = currentTurn === StoneColor.BLACK ? StoneColor.WHITE : StoneColor.BLACK;
                 setCurrentTurn(nextTurn);
             }
+        } catch (e) {
+            handleAiError(e);
         } finally {
             setIsThinking(false);
         }
       };
       makeAiMove();
     }
-  }, [currentTurn, aiPlaying, board]);
+  }, [currentTurn, aiPlaying, board, ollamaModel, ollamaBaseUrl]);
 
   const handleUndo = () => {
     if (history.length === 0) return;
@@ -117,6 +158,7 @@ const App: React.FC = () => {
     setHistory(prev => prev.slice(0, targetStateIndex));
     setAiSuggestion(null);
     setAnalysisData([]);
+    setErrorMsg(null);
   };
 
   const handleNewGame = () => {
@@ -127,16 +169,19 @@ const App: React.FC = () => {
     setLastMove(null);
     setAiSuggestion(null);
     setAnalysisData([]);
-    // Keep AI settings
+    setErrorMsg(null);
   };
 
   const handleAnalyze = async () => {
     if (isThinking) return;
     setIsThinking(true);
+    setErrorMsg(null);
     try {
-        const points = await getBoardAnalysis(board, currentTurn);
+        const points = await getBoardAnalysis(board, currentTurn, ollamaModel, ollamaBaseUrl);
         setAnalysisData(points);
         setShowAnalysis(true);
+    } catch (e) {
+        handleAiError(e);
     } finally {
         setIsThinking(false);
     }
@@ -145,14 +190,17 @@ const App: React.FC = () => {
   const handleAskBestMove = async () => {
     if (isThinking) return;
     setIsThinking(true);
+    setErrorMsg(null);
     try {
-        const move = await getBestMove(board, currentTurn);
+        const move = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
         if (move) {
             setAiSuggestion(`Recommended: ${move.x},${move.y} - ${move.explanation}`);
             // Highlight the move temporarily
             setAnalysisData([{ x: move.x, y: move.y, weight: 100, reasoning: move.explanation || "Best Move" }]);
             setShowAnalysis(true);
         }
+    } catch (e) {
+        handleAiError(e);
     } finally {
         setIsThinking(false);
     }
@@ -165,10 +213,10 @@ const App: React.FC = () => {
       <header className="mb-6 text-center">
         <h1 className="text-4xl font-serif-sc font-bold text-stone-800 mb-2 flex items-center justify-center gap-3">
           <Activity className="w-8 h-8 text-emerald-600" />
-          Zen Go <span className="text-stone-400 font-light text-2xl">| Weiqi AI</span>
+          Zen Go <span className="text-stone-400 font-light text-2xl">| Local AI</span>
         </h1>
         <p className="text-stone-500 text-sm max-w-md mx-auto">
-          Play against Gemini-powered AI. Analyze positions and visualize influence.
+          Play against local LLMs via Ollama.
         </p>
       </header>
 
@@ -203,7 +251,64 @@ const App: React.FC = () => {
 
             {/* AI Controls */}
             <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mt-2">
-                <h3 className="text-xs font-semibold uppercase text-stone-400 mb-3 tracking-wider">Opponent</h3>
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-xs font-semibold uppercase text-stone-400 tracking-wider">AI Settings</h3>
+                    <button 
+                        onClick={() => setShowSettings(!showSettings)} 
+                        className={`text-stone-400 hover:text-stone-600 transition-colors ${showSettings ? 'text-emerald-500' : ''}`}
+                    >
+                        <Settings size={14} />
+                    </button>
+                </div>
+                
+                {showSettings && (
+                    <div className="mb-4 p-3 bg-stone-50 rounded border border-stone-200 space-y-3">
+                         <div>
+                            <label className="text-xs font-bold text-stone-600 block mb-1">Ollama Base URL</label>
+                            <div className="flex gap-1">
+                                <input 
+                                    type="text" 
+                                    value={ollamaBaseUrl}
+                                    onChange={(e) => setOllamaBaseUrl(e.target.value)}
+                                    className="w-full text-xs p-1.5 border border-stone-300 rounded focus:border-emerald-500 outline-none"
+                                />
+                                <button 
+                                    onClick={() => handleFetchModels(false)}
+                                    disabled={isFetchingModels}
+                                    className="p-1.5 bg-stone-200 rounded hover:bg-stone-300 text-stone-600 disabled:opacity-50"
+                                    title="Fetch Models"
+                                >
+                                    <RefreshCw size={12} className={isFetchingModels ? "animate-spin" : ""} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-bold text-stone-600 block mb-1">Model</label>
+                            {availableModels.length > 0 ? (
+                                <select 
+                                    value={ollamaModel}
+                                    onChange={(e) => setOllamaModel(e.target.value)}
+                                    className="w-full text-xs p-1.5 border border-stone-300 rounded focus:border-emerald-500 outline-none bg-white"
+                                >
+                                    {availableModels.map(model => (
+                                        <option key={model} value={model}>{model}</option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <input 
+                                    type="text" 
+                                    value={ollamaModel}
+                                    onChange={(e) => setOllamaModel(e.target.value)}
+                                    placeholder="e.g. llama3"
+                                    className="w-full text-xs p-1.5 border border-stone-300 rounded focus:border-emerald-500 outline-none"
+                                />
+                            )}
+                        </div>
+                        <p className="text-[10px] text-stone-400">Ensure 'ollama serve' is running.</p>
+                    </div>
+                )}
+
                 <div className="flex flex-col gap-2">
                     <button 
                         onClick={() => setAiPlaying(null)}
@@ -228,6 +333,14 @@ const App: React.FC = () => {
                     </button>
                 </div>
             </div>
+
+            {/* Error Message Display */}
+            {errorMsg && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-red-700 break-words">{errorMsg}</p>
+                </div>
+            )}
 
         </div>
 
