@@ -1,9 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Board } from './components/Board';
 import { StoneColor, Coordinates, AnalysisPoint, GameHistory } from './types';
 import { createEmptyBoard, placeStone, BOARD_SIZE } from './utils/gameLogic';
-import { getBestMove, getBoardAnalysis, fetchOllamaModels } from './services/geminiService';
-import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle } from 'lucide-react';
+import { getBestMove, getBoardAnalysis, fetchOllamaModels, sendChat } from './services/geminiService';
+import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle, MessageSquare, Send } from 'lucide-react';
+
+interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+}
 
 const App: React.FC = () => {
   // Game State
@@ -20,6 +26,13 @@ const App: React.FC = () => {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
+  // Chat State
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
+    { role: 'system', content: 'Welcome to Zen Go. Game started.', timestamp: Date.now() }
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
   // Settings
   // Using 127.0.0.1 is safer than localhost to avoid IPv6 resolution issues with Ollama
   const [aiPlaying, setAiPlaying] = useState<StoneColor | null>(StoneColor.WHITE); 
@@ -35,6 +48,11 @@ const App: React.FC = () => {
   useEffect(() => {
     handleFetchModels(true);
   }, []);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory]);
 
   const handleFetchModels = async (silent = false) => {
     if (!silent) setIsFetchingModels(true);
@@ -58,6 +76,10 @@ const App: React.FC = () => {
     }
   };
 
+  const addChatMessage = (role: 'user' | 'assistant' | 'system', content: string) => {
+      setChatHistory(prev => [...prev, { role, content, timestamp: Date.now() }]);
+  };
+
   // Helper to append history
   const addToHistory = () => {
     setHistory(prev => [
@@ -69,6 +91,11 @@ const App: React.FC = () => {
         lastMove: lastMove ? { ...lastMove } : null
       }
     ]);
+  };
+
+  const getCoordString = (x: number, y: number) => {
+      const letters = "ABCDEFGHJKLMNOPQRST";
+      return `${letters[x]}${BOARD_SIZE - y}`;
   };
 
   const handleIntersectionClick = async (x: number, y: number) => {
@@ -91,6 +118,10 @@ const App: React.FC = () => {
       return false; // Invalid move
     }
 
+    const colorName = color === StoneColor.BLACK ? "Black" : "White";
+    const icon = color === StoneColor.BLACK ? "⚫" : "⚪";
+    addChatMessage('system', `${icon} ${colorName} played at ${getCoordString(x, y)}`);
+
     addToHistory();
     setBoard(result.newGrid);
     setLastMove({ x, y });
@@ -98,6 +129,10 @@ const App: React.FC = () => {
     
     // Update captures
     const captured = result.capturedCount;
+    if (captured > 0) {
+        addChatMessage('system', `${captured} stone(s) captured.`);
+    }
+
     if (color === StoneColor.BLACK) {
       setCaptures(prev => ({ ...prev, white: prev.white + captured }));
     } else {
@@ -126,7 +161,7 @@ const App: React.FC = () => {
          msg = err.message;
      }
      setErrorMsg(msg);
-     setAiSuggestion(msg);
+     addChatMessage('system', `Error: ${msg}`);
   };
 
   // AI Turn Effect
@@ -146,7 +181,9 @@ const App: React.FC = () => {
               if (move.x >= 0 && move.x < BOARD_SIZE && move.y >= 0 && move.y < BOARD_SIZE) {
                 const success = await executeMove(move.x, move.y, currentTurn);
                 if (success) {
-                  setAiSuggestion(move.explanation || "Strategic placement.");
+                  const reasoning = move.explanation || "Strategic placement.";
+                  setAiSuggestion(reasoning);
+                  addChatMessage('assistant', `AI Thought: ${reasoning}`);
                   break; // Success, exit retry loop
                 } else {
                   // Invalid move logic (occupied etc)
@@ -162,7 +199,9 @@ const App: React.FC = () => {
             }
             
             if (retryCount > maxRetries) {
-                 setAiSuggestion("Pass (AI failed to find valid move)");
+                 const msg = "Pass (AI failed to find valid move)";
+                 setAiSuggestion(msg);
+                 addChatMessage('system', `AI Passed.`);
                  const nextTurn = currentTurn === StoneColor.BLACK ? StoneColor.WHITE : StoneColor.BLACK;
                  setCurrentTurn(nextTurn);
                  break;
@@ -177,6 +216,35 @@ const App: React.FC = () => {
       makeAiMove();
     }
   }, [currentTurn, aiPlaying, board, ollamaModel, ollamaBaseUrl]);
+
+  const handleSendMessage = async () => {
+      if (!chatInput.trim() || isThinking) return;
+      
+      const userMsg = chatInput.trim();
+      setChatInput("");
+      addChatMessage('user', userMsg);
+      setIsThinking(true);
+
+      try {
+          const apiHistory = chatHistory
+            .filter(m => m.role !== 'system')
+            .map(m => ({ role: m.role, content: m.content }));
+            
+          const response = await sendChat(board, currentTurn, apiHistory, userMsg, ollamaModel, ollamaBaseUrl);
+          addChatMessage('assistant', response);
+      } catch (e) {
+          handleAiError(e);
+      } finally {
+          setIsThinking(false);
+      }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          handleSendMessage();
+      }
+  };
 
   const handleUndo = () => {
     if (history.length === 0) return;
@@ -204,6 +272,7 @@ const App: React.FC = () => {
     setAiSuggestion(null);
     setAnalysisData([]);
     setErrorMsg(null);
+    addChatMessage('system', 'Undo performed.');
   };
 
   const handleNewGame = () => {
@@ -215,16 +284,24 @@ const App: React.FC = () => {
     setAiSuggestion(null);
     setAnalysisData([]);
     setErrorMsg(null);
+    setChatHistory([{ role: 'system', content: 'New Game Started.', timestamp: Date.now() }]);
   };
 
   const handleAnalyze = async () => {
     if (isThinking) return;
     setIsThinking(true);
     setErrorMsg(null);
+    addChatMessage('system', 'Analyzing position...');
     try {
         const points = await getBoardAnalysis(board, currentTurn, ollamaModel, ollamaBaseUrl);
         setAnalysisData(points);
         setShowAnalysis(true);
+        if (points.length > 0) {
+            const summary = points.map(p => `${getCoordString(p.x, p.y)} (${p.weight}%)`).join(', ');
+            addChatMessage('assistant', `Analysis complete. Top moves: ${summary}`);
+        } else {
+            addChatMessage('assistant', 'Analysis returned no specific hotspots.');
+        }
     } catch (e) {
         handleAiError(e);
     } finally {
@@ -239,7 +316,10 @@ const App: React.FC = () => {
     try {
         const move = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
         if (move) {
-            setAiSuggestion(`Recommended: ${move.x},${move.y} - ${move.explanation}`);
+            const coord = getCoordString(move.x, move.y);
+            const msg = `Recommended: ${coord} - ${move.explanation}`;
+            setAiSuggestion(msg);
+            addChatMessage('assistant', msg);
             // Highlight the move temporarily
             setAnalysisData([{ x: move.x, y: move.y, weight: 100, reasoning: move.explanation || "Best Move" }]);
             setShowAnalysis(true);
@@ -421,8 +501,8 @@ const App: React.FC = () => {
              />
         </div>
 
-        {/* Right Panel: Actions & Analysis */}
-        <div className="w-full lg:w-72 flex flex-col gap-4 order-3">
+        {/* Right Panel: Actions & Analysis & Chat */}
+        <div className="w-full lg:w-80 flex flex-col gap-4 order-3 h-[600px] lg:h-auto">
             
             {/* Game Actions */}
             <div className="grid grid-cols-2 gap-2">
@@ -441,74 +521,90 @@ const App: React.FC = () => {
                 </button>
             </div>
 
-            {/* Analysis Tools */}
-             <div className="bg-white p-5 rounded-xl shadow-sm border border-stone-200">
-                <h3 className="text-xs font-semibold uppercase text-stone-400 mb-4 tracking-wider flex items-center gap-2">
-                    <Brain size={14} /> AI Assistance
-                </h3>
+             {/* Action Buttons */}
+             <div className="grid grid-cols-2 gap-2">
+                 <button 
+                    onClick={handleAskBestMove}
+                    disabled={isThinking || (!!aiPlaying && currentTurn === aiPlaying)}
+                    className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-800 rounded-lg border border-emerald-100 hover:bg-emerald-100 transition-colors disabled:opacity-50 text-xs font-medium"
+                >
+                    <Play size={14} /> Ask Best Move
+                </button>
 
-                <div className="space-y-3">
-                    <button 
-                        onClick={handleAskBestMove}
-                        disabled={isThinking || (!!aiPlaying && currentTurn === aiPlaying)}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-emerald-50 text-emerald-800 rounded-lg border border-emerald-100 hover:bg-emerald-100 transition-colors disabled:opacity-50 text-sm font-medium"
-                    >
-                        <span>Ask Best Move</span>
-                        <Play size={14} />
-                    </button>
-
-                    <button 
-                        onClick={handleAnalyze}
-                        disabled={isThinking}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-indigo-50 text-indigo-800 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors disabled:opacity-50 text-sm font-medium"
-                    >
-                        <span>Analyze Position</span>
-                        <Info size={14} />
-                    </button>
-                    
-                    {analysisData.length > 0 && (
-                        <div className="flex items-center gap-2 mt-2">
-                             <input 
-                                type="checkbox" 
-                                id="showAnalysis" 
-                                checked={showAnalysis} 
-                                onChange={(e) => setShowAnalysis(e.target.checked)}
-                                className="w-4 h-4 accent-emerald-600"
-                             />
-                             <label htmlFor="showAnalysis" className="text-sm text-stone-600 select-none cursor-pointer">Show Overlay</label>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* AI Message/Analysis Output */}
-            {(aiSuggestion || (analysisData.length > 0 && showAnalysis)) && (
-                <div className="bg-stone-800 text-stone-100 p-5 rounded-xl shadow-lg border-l-4 border-emerald-500 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <h4 className="font-bold text-emerald-400 text-sm mb-2 flex items-center gap-2">
-                        <Activity size={14} /> AI Insight
-                    </h4>
-                    
-                    {aiSuggestion && (
-                        <div className="mb-3">
-                            <p className="text-sm leading-relaxed opacity-90">{aiSuggestion}</p>
-                        </div>
-                    )}
-
-                    {analysisData.length > 0 && showAnalysis && !aiSuggestion && (
-                        <div className="space-y-2">
-                            {analysisData.slice(0, 3).map((point, i) => (
-                                <div key={i} className="flex items-start gap-2 text-xs border-b border-stone-700 pb-2 last:border-0">
-                                    <span className="bg-stone-700 text-stone-300 px-1.5 py-0.5 rounded font-mono">
-                                        {String.fromCharCode(65 + point.x)}{BOARD_SIZE - point.y}
-                                    </span>
-                                    <span className="flex-1 opacity-80">{point.reasoning}</span>
-                                    <span className="font-bold text-emerald-400">{point.weight}%</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                <button 
+                    onClick={handleAnalyze}
+                    disabled={isThinking}
+                    className="flex items-center justify-center gap-2 px-3 py-2 bg-indigo-50 text-indigo-800 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors disabled:opacity-50 text-xs font-medium"
+                >
+                    <Info size={14} /> Analyze
+                </button>
+             </div>
+             
+             {analysisData.length > 0 && (
+                <div className="flex items-center gap-2 px-2">
+                        <input 
+                        type="checkbox" 
+                        id="showAnalysis" 
+                        checked={showAnalysis} 
+                        onChange={(e) => setShowAnalysis(e.target.checked)}
+                        className="w-4 h-4 accent-emerald-600"
+                        />
+                        <label htmlFor="showAnalysis" className="text-sm text-stone-600 select-none cursor-pointer">Show Overlay on Board</label>
                 </div>
             )}
+
+            {/* Chat & Logs Window */}
+            <div className="flex-1 bg-white rounded-xl shadow-lg border border-stone-200 flex flex-col overflow-hidden min-h-[300px]">
+                <div className="p-3 border-b border-stone-100 bg-stone-50 flex items-center gap-2">
+                    <MessageSquare size={16} className="text-stone-400" />
+                    <span className="text-xs font-bold text-stone-600 uppercase tracking-wide">Game Log & Chat</span>
+                </div>
+                
+                {/* Messages Area */}
+                <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-stone-50/30">
+                    {chatHistory.map((msg, idx) => (
+                        <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                            <div 
+                                className={`max-w-[90%] rounded-lg px-3 py-2 text-sm shadow-sm
+                                ${msg.role === 'user' ? 'bg-blue-600 text-white' : 
+                                  msg.role === 'system' ? 'bg-stone-200 text-stone-600 text-xs font-mono' : 
+                                  'bg-white border border-stone-200 text-stone-800'}
+                                `}
+                            >
+                                {msg.content}
+                            </div>
+                        </div>
+                    ))}
+                    {isThinking && (
+                        <div className="flex items-start">
+                             <div className="bg-white border border-stone-200 rounded-lg px-3 py-2 text-xs text-stone-400 italic animate-pulse">
+                                AI is thinking...
+                             </div>
+                        </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
+
+                {/* Input Area */}
+                <div className="p-2 bg-white border-t border-stone-100 flex gap-2">
+                    <input 
+                        type="text" 
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Ask about the game..."
+                        className="flex-1 text-sm bg-stone-50 border border-stone-200 rounded-md px-3 py-2 outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+                        disabled={isThinking}
+                    />
+                    <button 
+                        onClick={handleSendMessage}
+                        disabled={!chatInput.trim() || isThinking}
+                        className="bg-emerald-600 text-white p-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 disabled:hover:bg-emerald-600 transition-colors"
+                    >
+                        <Send size={16} />
+                    </button>
+                </div>
+            </div>
 
         </div>
       </div>

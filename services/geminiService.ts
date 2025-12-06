@@ -52,9 +52,22 @@ export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
 };
 
 // Generic fetch wrapper for Ollama using Chat API
-async function callOllamaChat(systemPrompt: string, userMessage: string, model: string, baseUrl: string): Promise<any> {
+async function callOllamaChat(messages: any[], model: string, baseUrl: string, jsonMode: boolean = true): Promise<any> {
   const cleanUrl = normalizeUrl(baseUrl);
   const apiUrl = cleanUrl + "/api/chat";
+
+  const body: any = {
+    model: model,
+    messages: messages,
+    stream: false,
+    options: {
+      temperature: 0.2 // Lower temperature for more consistent logic
+    }
+  };
+
+  if (jsonMode) {
+    body.format = "json";
+  }
 
   try {
     const response = await fetch(apiUrl, {
@@ -62,19 +75,7 @@ async function callOllamaChat(systemPrompt: string, userMessage: string, model: 
       headers: {
         'Content-Type': 'application/json',
       },
-      // Using /api/chat is better for instruction following on models like Llama 3
-      body: JSON.stringify({
-        model: model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage }
-        ],
-        stream: false,
-        format: "json", // Force JSON mode
-        options: {
-          temperature: 0.2 // Lower temperature for more consistent logic
-        }
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -84,6 +85,10 @@ async function callOllamaChat(systemPrompt: string, userMessage: string, model: 
     const data = await response.json();
     const content = data.message?.content || "";
     
+    if (!jsonMode) {
+      return content;
+    }
+
     // Parse JSON
     try {
       // Sometimes models wrap JSON in markdown code blocks like ```json ... ```
@@ -139,7 +144,12 @@ export const getBestMove = async (
   const userMessage = "Current Board State:\n" + boardStr + "\n\nIt is " + playerStr + "'s turn. What is the best move?";
 
   try {
-    const json = await callOllamaChat(systemPrompt, userMessage, modelName, baseUrl);
+    const json = await callOllamaChat(
+      [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+      modelName, 
+      baseUrl, 
+      true
+    );
     
     if (json && typeof json.x === 'number' && typeof json.y === 'number') {
       return { x: json.x, y: json.y, explanation: json.explanation || "Strategic move" };
@@ -170,7 +180,12 @@ export const getBoardAnalysis = async (
   const userMessage = "Current Board State:\n" + boardStr + "\n\nIt is " + playerStr + "'s turn. Analyze the best candidate moves.";
 
   try {
-    const data = await callOllamaChat(systemPrompt, userMessage, modelName, baseUrl);
+    const data = await callOllamaChat(
+      [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+      modelName, 
+      baseUrl, 
+      true
+    );
     if (Array.isArray(data)) {
       return data as AnalysisPoint[];
     }
@@ -186,3 +201,36 @@ export const getBoardAnalysis = async (
     return [];
   }
 };
+
+export const sendChat = async (
+  grid: StoneColor[][],
+  player: StoneColor,
+  history: { role: string, content: string }[],
+  userMessage: string,
+  modelName: string,
+  baseUrl: string
+): Promise<string> => {
+  const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
+  const boardStr = boardToString(grid);
+
+  const systemPrompt = "You are a friendly and wise Go (Weiqi) tutor.\n" +
+  "You have access to the current board state below.\n" +
+  "Current Board:\n" + boardStr + "\n" +
+  "Current Turn: " + playerStr + "\n" +
+  "Answer the user's questions about the game situation, strategy, or rules based on this board.\n" +
+  "Keep answers concise and helpful.";
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...history.slice(-6), // Keep last few turns for context
+    { role: "user", content: userMessage }
+  ];
+
+  try {
+    const response = await callOllamaChat(messages, modelName, baseUrl, false);
+    return response;
+  } catch (error) {
+    console.error("Error in chat:", error);
+    throw error;
+  }
+}
