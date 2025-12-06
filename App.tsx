@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Board } from './components/Board';
 import { StoneColor, Coordinates, AnalysisPoint, GameHistory } from './types';
 import { createEmptyBoard, placeStone, BOARD_SIZE } from './utils/gameLogic';
-import { getBestMove, getBoardAnalysis, fetchOllamaModels, sendChat } from './services/geminiService';
-import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle, MessageSquare, Send } from 'lucide-react';
+import { getBestMove, getBoardAnalysis, fetchOllamaModels, sendChat, boardToString } from './services/geminiService';
+import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle, MessageSquare, Send, Code } from 'lucide-react';
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -32,6 +32,8 @@ const App: React.FC = () => {
   ]);
   const [chatInput, setChatInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [showDebug, setShowDebug] = useState(false);
+  const [lastDebugLog, setLastDebugLog] = useState<any>(null);
 
   // Settings
   // Using 127.0.0.1 is safer than localhost to avoid IPv6 resolution issues with Ollama
@@ -175,7 +177,9 @@ const App: React.FC = () => {
         
         while (retryCount <= maxRetries) {
           try {
-            const move = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
+            const { result: move, payload } = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
+            setLastDebugLog(payload);
+            
             if (move) {
               // Validate move coordinates
               if (move.x >= 0 && move.x < BOARD_SIZE && move.y >= 0 && move.y < BOARD_SIZE) {
@@ -230,7 +234,8 @@ const App: React.FC = () => {
             .filter(m => m.role !== 'system')
             .map(m => ({ role: m.role, content: m.content }));
             
-          const response = await sendChat(board, currentTurn, apiHistory, userMsg, ollamaModel, ollamaBaseUrl);
+          const { result: response, payload } = await sendChat(board, currentTurn, apiHistory, history, userMsg, ollamaModel, ollamaBaseUrl);
+          setLastDebugLog(payload);
           addChatMessage('assistant', response);
       } catch (e) {
           handleAiError(e);
@@ -293,7 +298,8 @@ const App: React.FC = () => {
     setErrorMsg(null);
     addChatMessage('system', 'Analyzing position...');
     try {
-        const points = await getBoardAnalysis(board, currentTurn, ollamaModel, ollamaBaseUrl);
+        const { result: points, payload } = await getBoardAnalysis(board, currentTurn, ollamaModel, ollamaBaseUrl);
+        setLastDebugLog(payload);
         setAnalysisData(points);
         setShowAnalysis(true);
         if (points.length > 0) {
@@ -314,7 +320,8 @@ const App: React.FC = () => {
     setIsThinking(true);
     setErrorMsg(null);
     try {
-        const move = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
+        const { result: move, payload } = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
+        setLastDebugLog(payload);
         if (move) {
             const coord = getCoordString(move.x, move.y);
             const msg = `Recommended: ${coord} - ${move.explanation}`;
@@ -554,11 +561,39 @@ const App: React.FC = () => {
             )}
 
             {/* Chat & Logs Window */}
-            <div className="h-[500px] bg-white rounded-xl shadow-lg border border-stone-200 flex flex-col overflow-hidden">
-                <div className="p-3 border-b border-stone-100 bg-stone-50 flex items-center gap-2">
-                    <MessageSquare size={16} className="text-stone-400" />
-                    <span className="text-xs font-bold text-stone-600 uppercase tracking-wide">Game Log & Chat</span>
+            <div className="h-[500px] bg-white rounded-xl shadow-lg border border-stone-200 flex flex-col overflow-hidden relative">
+                <div className="p-3 border-b border-stone-100 bg-stone-50 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                         <MessageSquare size={16} className="text-stone-400" />
+                         <span className="text-xs font-bold text-stone-600 uppercase tracking-wide">Game Log & Chat</span>
+                    </div>
+                    {lastDebugLog && (
+                        <button 
+                            onClick={() => setShowDebug(!showDebug)} 
+                            className={`p-1 rounded hover:bg-stone-200 transition-colors ${showDebug ? 'text-emerald-600 bg-emerald-50' : 'text-stone-400'}`}
+                            title="View AI Prompt / Debug Info"
+                        >
+                            <Code size={14} />
+                        </button>
+                    )}
                 </div>
+                
+                {/* Debug Overlay */}
+                {showDebug && lastDebugLog && (
+                    <div className="absolute inset-0 top-[40px] bg-white/95 backdrop-blur z-20 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-200">
+                        <div className="p-2 border-b border-stone-200 flex justify-between items-center bg-stone-50">
+                            <span className="text-xs font-mono font-bold text-stone-600">Raw Prompt Payload</span>
+                            <button onClick={() => setShowDebug(false)} className="text-stone-400 hover:text-stone-600">
+                                <X size={14} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-auto p-4">
+                             <pre className="text-[10px] font-mono text-stone-700 whitespace-pre-wrap break-all">
+                                {JSON.stringify(lastDebugLog, null, 2)}
+                             </pre>
+                        </div>
+                    </div>
+                )}
                 
                 {/* Messages Area */}
                 <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-stone-50/30">

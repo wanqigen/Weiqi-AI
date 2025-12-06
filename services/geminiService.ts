@@ -3,7 +3,7 @@ import { StoneColor, AnalysisPoint, MoveResult } from "../types";
 const BOARD_SIZE = 19;
 
 // Helper to convert grid to string representation for the AI
-const boardToString = (grid: StoneColor[][]): string => {
+export const boardToString = (grid: StoneColor[][]): string => {
   const letters = "ABCDEFGHJKLMNOPQRST"; // Standard Go coordinates (skip I)
   let s = "   " + letters.split('').join(' ') + "\n";
   
@@ -18,6 +18,14 @@ const boardToString = (grid: StoneColor[][]): string => {
   }
   s += "   " + letters.split('').join(' ');
   return s;
+};
+
+// Helper to convert x,y to Go notation (e.g. 3,3 -> D16)
+const toGoCoordinate = (x: number, y: number): string => {
+  const letters = "ABCDEFGHJKLMNOPQRST";
+  const col = letters[x] || '?';
+  const row = BOARD_SIZE - y;
+  return `${col}${row}`;
 };
 
 // Helper to ensure URL has protocol
@@ -131,7 +139,7 @@ export const getBestMove = async (
   player: StoneColor,
   modelName: string,
   baseUrl: string
-): Promise<MoveResult | null> => {
+): Promise<{ result: MoveResult | null, payload: any }> => {
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
@@ -143,18 +151,23 @@ export const getBestMove = async (
 
   const userMessage = "Current Board State:\n" + boardStr + "\n\nIt is " + playerStr + "'s turn. What is the best move?";
 
+  const messages = [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }];
+
   try {
     const json = await callOllamaChat(
-      [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+      messages,
       modelName, 
       baseUrl, 
       true
     );
     
     if (json && typeof json.x === 'number' && typeof json.y === 'number') {
-      return { x: json.x, y: json.y, explanation: json.explanation || "Strategic move" };
+      return { 
+        result: { x: json.x, y: json.y, explanation: json.explanation || "Strategic move" },
+        payload: messages 
+      };
     }
-    return null;
+    return { result: null, payload: messages };
 
   } catch (error) {
     console.error("Error getting best move:", error);
@@ -167,7 +180,7 @@ export const getBoardAnalysis = async (
   player: StoneColor,
   modelName: string,
   baseUrl: string
-): Promise<AnalysisPoint[]> => {
+): Promise<{ result: AnalysisPoint[], payload: any }> => {
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
@@ -178,27 +191,30 @@ export const getBoardAnalysis = async (
     "Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).";
 
   const userMessage = "Current Board State:\n" + boardStr + "\n\nIt is " + playerStr + "'s turn. Analyze the best candidate moves.";
+  const messages = [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }];
 
   try {
     const data = await callOllamaChat(
-      [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }],
+      messages,
       modelName, 
       baseUrl, 
       true
     );
+    let result: AnalysisPoint[] = [];
+
     if (Array.isArray(data)) {
-      return data as AnalysisPoint[];
-    }
-    // Handle case where model wraps array in object like { "moves": [...] }
-    if (data && typeof data === 'object') {
+      result = data as AnalysisPoint[];
+    } else if (data && typeof data === 'object') {
+        // Handle case where model wraps array in object like { "moves": [...] }
         const values = Object.values(data);
         const array = values.find(v => Array.isArray(v));
-        if (array) return array as AnalysisPoint[];
+        if (array) result = array as AnalysisPoint[];
     }
-    return [];
+    return { result, payload: messages };
+
   } catch (error) {
     console.error("Error analyzing board:", error);
-    return [];
+    return { result: [], payload: messages };
   }
 };
 
@@ -206,30 +222,61 @@ export const sendChat = async (
   grid: StoneColor[][],
   player: StoneColor,
   history: { role: string, content: string }[],
+  gameHistory: { turn: StoneColor, lastMove: {x: number, y: number} | null }[],
   userMessage: string,
   modelName: string,
   baseUrl: string
-): Promise<string> => {
+): Promise<{ result: string, payload: any }> => {
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
+
+  // Generate a textual summary of the last 10 moves
+  const recentMovesStr = gameHistory
+    .slice(-10)
+    .map((state, i) => {
+        if (!state.lastMove) return null;
+        const color = state.turn === StoneColor.BLACK ? "White" : "Black"; // The state stores WHOSE turn it WAS, so the move was made by the opponent of current turn? No, wait. 
+        // GameHistory stores state AFTER move usually. 
+        // Let's rely on the input structure. 
+        // We will just assume the history passed in is correct.
+        // Actually, let's just use coordinates.
+        const coord = toGoCoordinate(state.lastMove.x, state.lastMove.y);
+        // The move was made BY the player who just finished their turn.
+        // If current state turn is Black, previous move was White.
+        // Simplification: Just list coordinates.
+        return `${i + 1}. ${coord}`;
+    })
+    .filter(Boolean)
+    .join(", ");
 
   const systemPrompt = "You are a friendly and wise Go (Weiqi) tutor.\n" +
   "IMPORTANT: The board layout below is the CURRENT LIVE STATE. Previous chat context may refer to older states.\n" +
   "Always base your answer on the CURRENT BOARD provided here.\n\n" +
   "Current Board:\n" + boardStr + "\n\n" +
+  "Recent Moves (Last 10): " + (recentMovesStr || "None") + "\n" +
   "Current Turn: " + playerStr + "\n" +
   "Answer the user's questions about the game situation, strategy, or rules based on this board.\n" +
   "Keep answers concise and helpful.";
 
+  // We want to keep conversation history but FORCE the system prompt to be the first message always
+  // and we don't want to duplicate system prompts. 
+  // We will take the user's chat history (user/assistant messages) and prepend the FRESH system prompt.
+  
+  // Filter out old system prompts from history to avoid confusion
+  const cleanHistory = history.filter(m => m.role !== 'system');
+  
+  // Limit history length to avoid token limits (last 30 turns ~ 15 exchanges)
+  const truncatedHistory = cleanHistory.slice(-30);
+
   const messages = [
     { role: "system", content: systemPrompt },
-    ...history.slice(-6), // Keep last few turns for context
+    ...truncatedHistory, 
     { role: "user", content: userMessage }
   ];
 
   try {
     const response = await callOllamaChat(messages, modelName, baseUrl, false);
-    return response;
+    return { result: response, payload: messages };
   } catch (error) {
     console.error("Error in chat:", error);
     throw error;
