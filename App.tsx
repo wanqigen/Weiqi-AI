@@ -502,7 +502,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Right Panel: Actions & Analysis & Chat */}
-        <div className="w-full lg:w-80 flex flex-col gap-4 order-3 h-[600px] lg:h-auto">
+        <div className="w-full lg:w-80 flex flex-col gap-4 order-3">
             
             {/* Game Actions */}
             <div className="grid grid-cols-2 gap-2">
@@ -554,7 +554,7 @@ const App: React.FC = () => {
             )}
 
             {/* Chat & Logs Window */}
-            <div className="flex-1 bg-white rounded-xl shadow-lg border border-stone-200 flex flex-col overflow-hidden min-h-[300px]">
+            <div className="h-[500px] bg-white rounded-xl shadow-lg border border-stone-200 flex flex-col overflow-hidden">
                 <div className="p-3 border-b border-stone-100 bg-stone-50 flex items-center gap-2">
                     <MessageSquare size={16} className="text-stone-400" />
                     <span className="text-xs font-bold text-stone-600 uppercase tracking-wide">Game Log & Chat</span>

@@ -214,8 +214,9 @@ export const sendChat = async (
   const boardStr = boardToString(grid);
 
   const systemPrompt = "You are a friendly and wise Go (Weiqi) tutor.\n" +
-  "You have access to the current board state below.\n" +
-  "Current Board:\n" + boardStr + "\n" +
+  "IMPORTANT: The board layout below is the CURRENT LIVE STATE. Previous chat context may refer to older states.\n" +
+  "Always base your answer on the CURRENT BOARD provided here.\n\n" +
+  "Current Board:\n" + boardStr + "\n\n" +
   "Current Turn: " + playerStr + "\n" +
   "Answer the user's questions about the game situation, strategy, or rules based on this board.\n" +
   "Keep answers concise and helpful.";
