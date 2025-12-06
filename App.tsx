@@ -3,7 +3,7 @@ import { Board } from './components/Board';
 import { StoneColor, Coordinates, AnalysisPoint, GameHistory } from './types';
 import { createEmptyBoard, placeStone, BOARD_SIZE } from './utils/gameLogic';
 import { getBestMove, getBoardAnalysis, fetchOllamaModels } from './services/geminiService';
-import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle2 } from 'lucide-react';
+import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle } from 'lucide-react';
 
 const App: React.FC = () => {
   // Game State
@@ -117,7 +117,7 @@ const App: React.FC = () => {
      if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
          // Check for mixed content issue
          if (window.location.protocol === 'https:' && ollamaBaseUrl.startsWith('http:')) {
-            msg = `Mixed Content Error: Browser blocked HTTP request from HTTPS. Please run this app locally or enable 'Insecure content'.`;
+            msg = "Mixed Content Error: Browser blocked HTTP request from HTTPS. Please run this app locally or enable 'Insecure content'.";
          } else {
             msg = `Connection failed. Browser blocked the request to ${ollamaBaseUrl}.`;
          }
@@ -251,6 +251,13 @@ const App: React.FC = () => {
     }
   };
 
+  const getStatusIcon = () => {
+      if (isFetchingModels) return <RefreshCw size={12} className="animate-spin" />;
+      if (connectionStatus === 'success') return <CheckCircle size={12} />;
+      if (connectionStatus === 'error') return <AlertCircle size={12} />;
+      return <RefreshCw size={12} />;
+  };
+
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col items-center py-8 font-sans">
       
@@ -328,10 +335,7 @@ const App: React.FC = () => {
                                     className={`p-1.5 rounded hover:bg-stone-300 disabled:opacity-50 transition-colors ${connectionStatus === 'success' ? 'bg-emerald-100 text-emerald-600' : connectionStatus === 'error' ? 'bg-red-100 text-red-600' : 'bg-stone-200 text-stone-600'}`}
                                     title="Test Connection & Fetch Models"
                                 >
-                                    {isFetchingModels ? <RefreshCw size={12} className="animate-spin" /> : 
-                                     connectionStatus === 'success' ? <CheckCircle2 size={12} /> : 
-                                     connectionStatus === 'error' ? <AlertCircle size={12} /> : 
-                                     <RefreshCw size={12} />}
+                                    {getStatusIcon()}
                                 </button>
                             </div>
                         </div>

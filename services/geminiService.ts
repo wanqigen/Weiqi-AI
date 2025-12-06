@@ -24,7 +24,7 @@ const boardToString = (grid: StoneColor[][]): string => {
 const normalizeUrl = (url: string): string => {
   let cleanUrl = url.trim().replace(/\/$/, "");
   if (!/^https?:\/\//i.test(cleanUrl)) {
-    cleanUrl = `http://${cleanUrl}`;
+    cleanUrl = "http://" + cleanUrl;
   }
   return cleanUrl;
 };
@@ -33,10 +33,10 @@ const normalizeUrl = (url: string): string => {
 export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
   try {
     const cleanUrl = normalizeUrl(baseUrl);
-    const response = await fetch(`${cleanUrl}/api/tags`);
+    const response = await fetch(cleanUrl + "/api/tags");
     
     if (!response.ok) {
-      throw new Error(`Failed to fetch models: ${response.statusText}`);
+      throw new Error("Failed to fetch models: " + response.statusText);
     }
 
     const data = await response.json();
@@ -54,7 +54,7 @@ export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
 // Generic fetch wrapper for Ollama using Chat API
 async function callOllamaChat(systemPrompt: string, userMessage: string, model: string, baseUrl: string): Promise<any> {
   const cleanUrl = normalizeUrl(baseUrl);
-  const apiUrl = `${cleanUrl}/api/chat`;
+  const apiUrl = cleanUrl + "/api/chat";
 
   try {
     const response = await fetch(apiUrl, {
@@ -78,7 +78,7 @@ async function callOllamaChat(systemPrompt: string, userMessage: string, model: 
     });
 
     if (!response.ok) {
-      throw new Error(`Ollama API error: ${response.statusText}`);
+      throw new Error("Ollama API error: " + response.statusText);
     }
 
     const data = await response.json();
@@ -130,16 +130,13 @@ export const getBestMove = async (
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
-  const systemPrompt = `You are a professional 9-dan Go (Weiqi) player.
-You must analyze the board and find the ONE best move to play next.
-Output only a JSON object with coordinates 'x', 'y' and a short 'explanation'.
-Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).
-Do not output any markdown or conversational text.`;
+  const systemPrompt = "You are a professional 9-dan Go (Weiqi) player.\n" +
+    "You must analyze the board and find the ONE best move to play next.\n" +
+    "Output only a JSON object with coordinates 'x', 'y' and a short 'explanation'.\n" +
+    "Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).\n" +
+    "Do not output any markdown or conversational text.";
 
-  const userMessage = `Current Board State:
-${boardStr}
-
-It is ${playerStr}'s turn. What is the best move?`;
+  const userMessage = "Current Board State:\n" + boardStr + "\n\nIt is " + playerStr + "'s turn. What is the best move?";
 
   try {
     const json = await callOllamaChat(systemPrompt, userMessage, modelName, baseUrl);
@@ -164,16 +161,13 @@ export const getBoardAnalysis = async (
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
-  const systemPrompt = `You are a professional Go tutor.
-Identify the top 3 candidate moves for the current player.
-Output only a JSON ARRAY of objects.
-Each object must have 'x', 'y', 'weight' (0-100), and 'reasoning'.
-Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).`;
+  const systemPrompt = "You are a professional Go tutor.\n" +
+    "Identify the top 3 candidate moves for the current player.\n" +
+    "Output only a JSON ARRAY of objects.\n" +
+    "Each object must have 'x', 'y', 'weight' (0-100), and 'reasoning'.\n" +
+    "Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).";
 
-  const userMessage = `Current Board State:
-${boardStr}
-
-It is ${playerStr}'s turn. Analyze the best candidate moves.`;
+  const userMessage = "Current Board State:\n" + boardStr + "\n\nIt is " + playerStr + "'s turn. Analyze the best candidate moves.";
 
   try {
     const data = await callOllamaChat(systemPrompt, userMessage, modelName, baseUrl);
