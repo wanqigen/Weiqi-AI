@@ -51,10 +51,10 @@ export const fetchOllamaModels = async (baseUrl: string): Promise<string[]> => {
   }
 };
 
-// Generic fetch wrapper for Ollama
-async function callOllama(prompt: string, model: string, baseUrl: string): Promise<any> {
+// Generic fetch wrapper for Ollama using Chat API
+async function callOllamaChat(systemPrompt: string, userMessage: string, model: string, baseUrl: string): Promise<any> {
   const cleanUrl = normalizeUrl(baseUrl);
-  const apiUrl = `${cleanUrl}/api/generate`;
+  const apiUrl = `${cleanUrl}/api/chat`;
 
   try {
     const response = await fetch(apiUrl, {
@@ -62,11 +62,18 @@ async function callOllama(prompt: string, model: string, baseUrl: string): Promi
       headers: {
         'Content-Type': 'application/json',
       },
+      // Using /api/chat is better for instruction following on models like Llama 3
       body: JSON.stringify({
         model: model,
-        prompt: prompt,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage }
+        ],
         stream: false,
-        format: "json" // Request JSON mode from Ollama
+        format: "json", // Force JSON mode
+        options: {
+          temperature: 0.2 // Lower temperature for more consistent logic
+        }
       }),
     });
 
@@ -75,17 +82,39 @@ async function callOllama(prompt: string, model: string, baseUrl: string): Promi
     }
 
     const data = await response.json();
-    // Handle cases where response might be a string (some older Ollama versions/models)
-    if (typeof data.response === 'string') {
-        try {
-            return JSON.parse(data.response);
-        } catch (e) {
-            // If the model didn't return strict JSON despite "format: json", try to salvage
-            console.warn("Could not parse JSON from model response", data.response);
-            throw new Error("Model response was not valid JSON");
-        }
+    const content = data.message?.content || "";
+    
+    // Parse JSON
+    try {
+      // Sometimes models wrap JSON in markdown code blocks like ```json ... ```
+      // or add text before/after. We try to find the JSON object/array.
+      const jsonStart = content.indexOf('{');
+      const jsonArrayStart = content.indexOf('[');
+      
+      let startIdx = -1;
+      let endIdx = -1;
+
+      // Determine if object or array comes first
+      if (jsonStart !== -1 && (jsonArrayStart === -1 || jsonStart < jsonArrayStart)) {
+          startIdx = jsonStart;
+          endIdx = content.lastIndexOf('}') + 1;
+      } else if (jsonArrayStart !== -1) {
+          startIdx = jsonArrayStart;
+          endIdx = content.lastIndexOf(']') + 1;
+      }
+
+      if (startIdx !== -1 && endIdx !== -1) {
+        const jsonStr = content.substring(startIdx, endIdx);
+        return JSON.parse(jsonStr);
+      }
+      
+      // Fallback: try parsing the whole string
+      return JSON.parse(content);
+
+    } catch (e) {
+      console.warn("Could not parse JSON from model response", content);
+      throw new Error("Model response was not valid JSON");
     }
-    return data.response;
   } catch (error) {
     console.error("Ollama connection failed:", error);
     throw error;
@@ -101,27 +130,19 @@ export const getBestMove = async (
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
-  const prompt = `
-    You are a professional 9-dan Go (Weiqi) player.
-    
-    Current Board State:
-    ${boardStr}
-    
-    It is ${playerStr}'s turn.
-    Analyze the board and choose the ONE best next move.
-    
-    You must output a VALID JSON object. Do not include markdown formatting.
-    The JSON object must have these fields:
-    - "x": integer (0-18, representing the column from left, A=0)
-    - "y": integer (0-18, representing the row from top, 19=0)
-    - "explanation": string (A short strategic reasoning for the move)
+  const systemPrompt = `You are a professional 9-dan Go (Weiqi) player.
+You must analyze the board and find the ONE best move to play next.
+Output only a JSON object with coordinates 'x', 'y' and a short 'explanation'.
+Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).
+Do not output any markdown or conversational text.`;
 
-    Example Output:
-    { "x": 15, "y": 3, "explanation": "Approaching the corner to secure territory." }
-  `;
+  const userMessage = `Current Board State:
+${boardStr}
+
+It is ${playerStr}'s turn. What is the best move?`;
 
   try {
-    const json = await callOllama(prompt, modelName, baseUrl);
+    const json = await callOllamaChat(systemPrompt, userMessage, modelName, baseUrl);
     
     if (json && typeof json.x === 'number' && typeof json.y === 'number') {
       return { x: json.x, y: json.y, explanation: json.explanation || "Strategic move" };
@@ -130,7 +151,7 @@ export const getBestMove = async (
 
   } catch (error) {
     console.error("Error getting best move:", error);
-    throw error; // Re-throw to handle in UI
+    throw error;
   }
 };
 
@@ -143,31 +164,19 @@ export const getBoardAnalysis = async (
   const playerStr = player === StoneColor.BLACK ? "Black (X)" : "White (O)";
   const boardStr = boardToString(grid);
 
-  const prompt = `
-    You are a professional Go tutor.
-    
-    Current Board State:
-    ${boardStr}
-    
-    It is ${playerStr}'s turn.
-    Identify the top 3 candidate moves.
-    
-    You must output a VALID JSON ARRAY of objects. Do not include markdown formatting.
-    Each object in the array must have:
-    - "x": integer (0-18, column index)
-    - "y": integer (0-18, row index)
-    - "weight": integer (0-100, representing move quality)
-    - "reasoning": string (Short explanation)
+  const systemPrompt = `You are a professional Go tutor.
+Identify the top 3 candidate moves for the current player.
+Output only a JSON ARRAY of objects.
+Each object must have 'x', 'y', 'weight' (0-100), and 'reasoning'.
+Coordinates: x is 0-18 (left to right), y is 0-18 (top to bottom).`;
 
-    Example Output:
-    [
-      { "x": 3, "y": 3, "weight": 95, "reasoning": "Taking the star point." },
-      { "x": 16, "y": 3, "weight": 80, "reasoning": "Enclosing the corner." }
-    ]
-  `;
+  const userMessage = `Current Board State:
+${boardStr}
+
+It is ${playerStr}'s turn. Analyze the best candidate moves.`;
 
   try {
-    const data = await callOllama(prompt, modelName, baseUrl);
+    const data = await callOllamaChat(systemPrompt, userMessage, modelName, baseUrl);
     if (Array.isArray(data)) {
       return data as AnalysisPoint[];
     }

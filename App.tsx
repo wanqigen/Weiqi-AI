@@ -3,7 +3,7 @@ import { Board } from './components/Board';
 import { StoneColor, Coordinates, AnalysisPoint, GameHistory } from './types';
 import { createEmptyBoard, placeStone, BOARD_SIZE } from './utils/gameLogic';
 import { getBestMove, getBoardAnalysis, fetchOllamaModels } from './services/geminiService';
-import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle } from 'lucide-react';
+import { Brain, RotateCcw, Play, SkipForward, Info, Activity, Settings, AlertCircle, RefreshCw, X, HelpCircle, CheckCircle2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Game State
@@ -21,13 +21,15 @@ const App: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   // Settings
-  const [aiPlaying, setAiPlaying] = useState<StoneColor | null>(StoneColor.WHITE); // Default AI plays White
-  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
+  // Using 127.0.0.1 is safer than localhost to avoid IPv6 resolution issues with Ollama
+  const [aiPlaying, setAiPlaying] = useState<StoneColor | null>(StoneColor.WHITE); 
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://127.0.0.1:11434");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [ollamaModel, setOllamaModel] = useState("llama3");
   const [showSettings, setShowSettings] = useState(false);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Initial fetch for models
   useEffect(() => {
@@ -36,6 +38,7 @@ const App: React.FC = () => {
 
   const handleFetchModels = async (silent = false) => {
     if (!silent) setIsFetchingModels(true);
+    setConnectionStatus('idle');
     setErrorMsg(null);
     try {
         const models = await fetchOllamaModels(ollamaBaseUrl);
@@ -44,9 +47,11 @@ const App: React.FC = () => {
         if (models.length > 0 && (!ollamaModel || !models.includes(ollamaModel))) {
             setOllamaModel(models[0]);
         }
+        if (!silent) setConnectionStatus('success');
     } catch (e) {
         if (!silent) {
             handleAiError(e);
+            setConnectionStatus('error');
         }
     } finally {
         if (!silent) setIsFetchingModels(false);
@@ -73,9 +78,18 @@ const App: React.FC = () => {
     await executeMove(x, y, currentTurn);
   };
 
-  const executeMove = async (x: number, y: number, color: StoneColor) => {
+  const executeMove = async (x: number, y: number, color: StoneColor): Promise<boolean> => {
+    // Validate coordinates
+    if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) {
+      console.warn(`Invalid coordinates: (${x}, ${y})`);
+      return false;
+    }
+
     const result = placeStone(board, x, y, color);
-    if (!result) return; // Invalid move
+    if (!result) {
+      console.warn(`Invalid move at (${x}, ${y}) - position occupied or suicide`);
+      return false; // Invalid move
+    }
 
     addToHistory();
     setBoard(result.newGrid);
@@ -95,12 +109,18 @@ const App: React.FC = () => {
     setCurrentTurn(nextTurn);
     setAnalysisData([]); // Clear old analysis
     setAiSuggestion(null);
+    return true;
   };
 
   const handleAiError = (err: any) => {
      let msg = "Failed to connect to Ollama.";
      if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
-         msg = `Connection failed. Browser blocked the request to ${ollamaBaseUrl}.`;
+         // Check for mixed content issue
+         if (window.location.protocol === 'https:' && ollamaBaseUrl.startsWith('http:')) {
+            msg = `Mixed Content Error: Browser blocked HTTP request from HTTPS. Please run this app locally or enable 'Insecure content'.`;
+         } else {
+            msg = `Connection failed. Browser blocked the request to ${ollamaBaseUrl}.`;
+         }
          setShowHelpModal(true);
      } else if (err instanceof Error) {
          msg = err.message;
@@ -115,21 +135,44 @@ const App: React.FC = () => {
       const makeAiMove = async () => {
         setIsThinking(true);
         setErrorMsg(null);
-        try {
+        let retryCount = 0;
+        const maxRetries = 2; // Reduced retries
+        
+        while (retryCount <= maxRetries) {
+          try {
             const move = await getBestMove(board, currentTurn, ollamaModel, ollamaBaseUrl);
             if (move) {
-                setAiSuggestion(move.explanation || "Strategic placement.");
-                await executeMove(move.x, move.y, currentTurn);
+              // Validate move coordinates
+              if (move.x >= 0 && move.x < BOARD_SIZE && move.y >= 0 && move.y < BOARD_SIZE) {
+                const success = await executeMove(move.x, move.y, currentTurn);
+                if (success) {
+                  setAiSuggestion(move.explanation || "Strategic placement.");
+                  break; // Success, exit retry loop
+                } else {
+                  // Invalid move logic (occupied etc)
+                  retryCount++;
+                  setAiSuggestion(`AI tried invalid move (${move.x}, ${move.y}), retrying...`);
+                }
+              } else {
+                retryCount++;
+              }
             } else {
-                setAiSuggestion("Pass (AI could not find a valid move)");
-                const nextTurn = currentTurn === StoneColor.BLACK ? StoneColor.WHITE : StoneColor.BLACK;
-                setCurrentTurn(nextTurn);
+                // Null move returned
+                retryCount++;
             }
-        } catch (e) {
+            
+            if (retryCount > maxRetries) {
+                 setAiSuggestion("Pass (AI failed to find valid move)");
+                 const nextTurn = currentTurn === StoneColor.BLACK ? StoneColor.WHITE : StoneColor.BLACK;
+                 setCurrentTurn(nextTurn);
+                 break;
+            }
+          } catch (e) {
             handleAiError(e);
-        } finally {
-            setIsThinking(false);
+            break;
+          }
         }
+        setIsThinking(false);
       };
       makeAiMove();
     }
@@ -282,10 +325,13 @@ const App: React.FC = () => {
                                 <button 
                                     onClick={() => handleFetchModels(false)}
                                     disabled={isFetchingModels}
-                                    className="p-1.5 bg-stone-200 rounded hover:bg-stone-300 text-stone-600 disabled:opacity-50"
-                                    title="Fetch Models"
+                                    className={`p-1.5 rounded hover:bg-stone-300 disabled:opacity-50 transition-colors ${connectionStatus === 'success' ? 'bg-emerald-100 text-emerald-600' : connectionStatus === 'error' ? 'bg-red-100 text-red-600' : 'bg-stone-200 text-stone-600'}`}
+                                    title="Test Connection & Fetch Models"
                                 >
-                                    <RefreshCw size={12} className={isFetchingModels ? "animate-spin" : ""} />
+                                    {isFetchingModels ? <RefreshCw size={12} className="animate-spin" /> : 
+                                     connectionStatus === 'success' ? <CheckCircle2 size={12} /> : 
+                                     connectionStatus === 'error' ? <AlertCircle size={12} /> : 
+                                     <RefreshCw size={12} />}
                                 </button>
                             </div>
                         </div>
@@ -481,30 +527,38 @@ const App: React.FC = () => {
                 
                 <div className="space-y-4 text-sm text-stone-700">
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                        <p className="font-bold text-amber-800 mb-1">Browser Security Block (CORS)</p>
-                        <p>Browsers block web pages from accessing local servers unless specifically allowed. You must restart Ollama with the <code>OLLAMA_ORIGINS</code> environment variable.</p>
+                        <p className="font-bold text-amber-800 mb-1">Connection Refused (CORS or Mixed Content)</p>
+                        <p>Browsers block web pages from accessing local servers unless specific headers are set.</p>
+                    </div>
+                    
+                    {window.location.protocol === 'https:' && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                            <p className="font-bold text-red-800 mb-1">HTTPS Warning</p>
+                            <p>You are viewing this page via HTTPS, but trying to access HTTP (Ollama). Browsers block this.</p>
+                            <p className="mt-2"><strong>Solution:</strong> Either run this frontend locally (http://localhost:...) OR use a tool like ngrok to tunnel your Ollama instance to https.</p>
+                        </div>
+                    )}
+
+                    <div>
+                        <h3 className="font-bold text-stone-900 mb-2">1. Configure Ollama (CORS)</h3>
+                        <p className="mb-2">Restart Ollama with the <code>OLLAMA_ORIGINS</code> variable:</p>
+                        <div className="bg-stone-800 text-stone-100 p-3 rounded-lg font-mono text-xs overflow-x-auto space-y-2">
+                             <div>
+                                <span className="text-stone-400"># Mac / Linux</span><br/>
+                                OLLAMA_ORIGINS="*" ollama serve
+                             </div>
+                             <div>
+                                <span className="text-stone-400"># Windows Powershell</span><br/>
+                                $env:OLLAMA_ORIGINS="*"; ollama serve
+                             </div>
+                        </div>
                     </div>
 
                     <div>
-                        <h3 className="font-bold text-stone-900 mb-2">How to fix (Mac / Linux):</h3>
-                        <pre className="bg-stone-800 text-stone-100 p-3 rounded-lg font-mono text-xs overflow-x-auto">
-                            OLLAMA_ORIGINS="*" ollama serve
-                        </pre>
-                    </div>
-
-                    <div>
-                        <h3 className="font-bold text-stone-900 mb-2">How to fix (Windows Powershell):</h3>
-                        <pre className="bg-stone-800 text-stone-100 p-3 rounded-lg font-mono text-xs overflow-x-auto">
-                            $env:OLLAMA_ORIGINS="*"; ollama serve
-                        </pre>
-                    </div>
-
-                    <div>
-                         <h3 className="font-bold text-stone-900 mb-2">Common Issues:</h3>
+                         <h3 className="font-bold text-stone-900 mb-2">2. Common Troubleshooting</h3>
                          <ul className="list-disc pl-5 space-y-1 text-stone-600">
-                             <li>Ensure Ollama is actually running (try visiting <code>http://localhost:11434</code> in a new tab).</li>
-                             <li>If you are using Chrome/Edge, verify the URL starts with <code>http://</code> not <code>https://</code> if your local server isn't using SSL.</li>
-                             <li>Sometimes <code>localhost</code> doesn't resolve; try using <code>http://127.0.0.1:11434</code>.</li>
+                             <li>Use <code>http://127.0.0.1:11434</code> instead of <code>localhost</code>.</li>
+                             <li>Ensure your model (e.g., <code>llama3</code>) is pulled: <code>ollama pull llama3</code>.</li>
                          </ul>
                     </div>
                 </div>
